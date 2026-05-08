@@ -2,7 +2,33 @@
 // Separar em arquivos distintos em produção
 
 const express = require('express');
-const yf = require('yahoo-finance2');
+const axios = require('axios');
+
+async function getQuote(ticker) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`;
+  const { data } = await axios.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  const meta = data.chart.result[0].meta;
+  return {
+    symbol:                    meta.symbol,
+    longName:                  meta.longName || ticker,
+    shortName:                 meta.shortName || ticker,
+    regularMarketPrice:        meta.regularMarketPrice,
+    regularMarketChange:       meta.regularMarketPrice - meta.chartPreviousClose,
+    regularMarketChangePercent:((meta.regularMarketPrice - meta.chartPreviousClose) / meta.chartPreviousClose) * 100,
+    regularMarketDayHigh:      meta.regularMarketDayHigh,
+    regularMarketDayLow:       meta.regularMarketDayLow,
+    regularMarketVolume:       meta.regularMarketVolume,
+    exchange:                  meta.exchangeName,
+    currency:                  meta.currency,
+    marketState:               meta.marketState,
+  };
+}
+
+async function searchTicker(query) {
+  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${query}&quotesCount=10`;
+  const { data } = await axios.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  return data.quotes || [];
+}
 const Redis   = require('ioredis');
 const { PrismaClient } = require('@prisma/client');
 const { requireAuth } = require('./auth');
@@ -32,8 +58,8 @@ router.get('/search', requireAuth, async (req, res) => {
 
   try {
     // Busca no Yahoo Finance
-    const results = await yf.search(q, { quotesCount: 10 });
-    const filtered = results.quotes
+    const results = await searchTicker(q);
+    const filtered = results
       .filter(r => r.symbol && r.quoteType !== 'OPTION')
       .filter(r => !exchange || exchange === 'Todos' || r.exchange === exchange)
       .slice(0, 8)
@@ -60,7 +86,7 @@ router.get('/quote/:ticker', requireAuth, async (req, res) => {
   if (cached) return res.json(JSON.parse(cached));
 
   try {
-    const q = await yf.quote(ticker);
+    const q = await getQuote(ticker);
     const data = {
       ticker:       q.symbol,
       name:         q.longName || q.shortName || ticker,
@@ -72,7 +98,7 @@ router.get('/quote/:ticker', requireAuth, async (req, res) => {
       volume:       q.regularMarketVolume,
       exchange:     q.exchange,
       currency:     q.currency,
-      marketState:  q.marketState, // REGULAR | PRE | POST | CLOSED
+      marketState:  q.marketState,
     };
 
     // Cache por 30s
@@ -89,18 +115,20 @@ router.get('/history/:ticker', requireAuth, async (req, res) => {
   const period = req.query.period || '1mo'; // 1d|5d|1mo|3mo|6mo|1y|5y
 
   try {
-    const history = await yf.historical(ticker, {
-      period1: periodToDate(period),
-      interval: period === '1d' ? '5m' : '1d',
-    });
-
-    const data = history.map(h => ({
-      date:   h.date,
-      open:   h.open,
-      high:   h.high,
-      low:    h.low,
-      close:  h.close,
-      volume: h.volume,
+    const interval = period === '1d' ? '5m' : '1d';
+    const range = period;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=${interval}&range=${range}`;
+    const { data: raw } = await axios.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const result = raw.chart.result[0];
+    const timestamps = result.timestamp || [];
+    const closes = result.indicators.quote[0].close || [];
+    const data = timestamps.map((t, i) => ({
+      date:   new Date(t * 1000),
+      close:  closes[i],
+      open:   result.indicators.quote[0].open?.[i],
+      high:   result.indicators.quote[0].high?.[i],
+      low:    result.indicators.quote[0].low?.[i],
+      volume: result.indicators.quote[0].volume?.[i],
     }));
 
     res.json(data);

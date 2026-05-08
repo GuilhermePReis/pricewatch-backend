@@ -24,7 +24,7 @@
     "node-cron": "^3.0.3",
     "prisma": "^5.10.0",
     "ws": "^8.16.0",
-    "yahoo-finance2": "^2.9.0",
+    "axios": "^1.6.8",
     "zod": "^3.22.4"
   },
   "devDependencies": {

@@ -1,16 +1,28 @@
 // PriceWatch — workers/alertWorker.js
-// Roda a cada 30s: verifica preços e dispara push se alerta atingido
-
-const cron    = require('node-cron');
+const cron   = require('node-cron');
 const { PrismaClient } = require('@prisma/client');
-const yf = require('yahoo-finance2');
-const admin   = require('firebase-admin');
-const Redis   = require('ioredis');
+const admin  = require('firebase-admin');
+const Redis  = require('ioredis');
+const axios  = require('axios');
 
 const prisma = new PrismaClient();
 const redis  = new Redis(process.env.REDIS_URL);
 
-// Inicializa Firebase Admin SDK
+// ─── Busca preços via Yahoo Finance direto ────────────────
+async function getQuotes(tickers) {
+  const result = {};
+  await Promise.all(tickers.map(async (ticker) => {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`;
+      const { data } = await axios.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      const price = data.chart.result[0].meta.regularMarketPrice;
+      result[ticker] = price;
+    } catch {}
+  }));
+  return result;
+}
+
+// ─── Inicializa Firebase ──────────────────────────────────
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert({
@@ -21,11 +33,9 @@ if (!admin.apps.length) {
   });
 }
 
-// ─── Inicia o worker ─────────────────────────────────────
+// ─── Inicia o worker ──────────────────────────────────────
 function startAlertWorker() {
   console.log('🔔 PriceWatch Alert Worker iniciado');
-
-  // Roda a cada 30 segundos
   cron.schedule('*/30 * * * * *', async () => {
     try {
       await checkAlerts();
@@ -37,7 +47,6 @@ function startAlertWorker() {
 
 // ─── Verifica todos os alertas ativos ────────────────────
 async function checkAlerts() {
-  // Carrega alertas ativos com dados do ativo e fcmToken do usuário
   const alerts = await prisma.alert.findMany({
     where: { active: true, triggeredAt: null },
     include: {
@@ -48,13 +57,9 @@ async function checkAlerts() {
 
   if (alerts.length === 0) return;
 
-  // Agrupa tickers únicos para fazer o mínimo de chamadas à API
   const tickers = [...new Set(alerts.map(a => a.asset.ticker))];
+  const prices  = await fetchPricesWithCache(tickers);
 
-  // Busca preços atuais (com cache Redis de 25s para não sobrecarregar a API)
-  const prices = await fetchPricesWithCache(tickers);
-
-  // Processa cada alerta
   for (const alert of alerts) {
     const price = prices[alert.asset.ticker];
     if (price == null) continue;
@@ -64,26 +69,19 @@ async function checkAlerts() {
       ? price >= target
       : price <= target;
 
-    if (triggered) {
-      await triggerAlert(alert, price);
-    }
+    if (triggered) await triggerAlert(alert, price);
   }
 }
 
-// ─── Dispara alerta: salva no BD + envia push ─────────────
+// ─── Dispara alerta ───────────────────────────────────────
 async function triggerAlert(alert, currentPrice) {
-  // Marca como disparado
   await prisma.alert.update({
     where: { id: alert.id },
-    data: { triggeredAt: new Date(), active: false },
+    data:  { triggeredAt: new Date(), active: false },
   });
 
-  console.log(
-    `[AlertWorker] ✅ Alerta disparado: ${alert.asset.ticker} ` +
-    `${alert.direction} ${alert.targetPrice} (atual: ${currentPrice})`
-  );
+  console.log(`[AlertWorker] ✅ ${alert.asset.ticker} disparou (atual: ${currentPrice})`);
 
-  // Envia push notification se o usuário tiver token FCM
   if (!alert.user.fcmToken) return;
 
   const dirLabel = alert.direction === 'ABOVE' ? 'subiu acima de' : 'caiu abaixo de';
@@ -97,15 +95,13 @@ async function triggerAlert(alert, currentPrice) {
         body,
       },
       data: {
-        alertId:  alert.id,
-        ticker:   alert.asset.ticker,
-        price:    String(currentPrice),
-        screen:   'AssetDetail',
+        alertId: alert.id,
+        ticker:  alert.asset.ticker,
+        price:   String(currentPrice),
+        screen:  'AssetDetail',
       },
       android: { priority: 'high' },
-      apns: {
-        payload: { aps: { sound: 'default', badge: 1 } },
-      },
+      apns: { payload: { aps: { sound: 'default', badge: 1 } } },
     });
   } catch (err) {
     console.error('[AlertWorker] Erro FCM:', err.message);
@@ -114,40 +110,30 @@ async function triggerAlert(alert, currentPrice) {
 
 // ─── Busca preços com cache Redis ─────────────────────────
 async function fetchPricesWithCache(tickers) {
-  const result = {};
+  const result  = {};
   const toFetch = [];
 
   for (const ticker of tickers) {
-    const cached = await redis.get(`price:${ticker}`);
-    if (cached) {
-      result[ticker] = parseFloat(cached);
-    } else {
-      toFetch.push(ticker);
-    }
+    try {
+      const cached = await redis.get(`price:${ticker}`);
+      if (cached) { result[ticker] = parseFloat(cached); continue; }
+    } catch {}
+    toFetch.push(ticker);
   }
 
   if (toFetch.length > 0) {
-    // Yahoo Finance aceita array de tickers
-    const quotes = await yf.quote(toFetch);
-    const arr = Array.isArray(quotes) ? quotes : [quotes];
-
-    for (const q of arr) {
-      const price = q.regularMarketPrice;
-      if (price != null) {
-        result[q.symbol] = price;
-        // Cache por 25s (ligeiramente menor que o intervalo do cron)
-        await redis.set(`price:${q.symbol}`, price, 'EX', 25);
-
-        // Persiste no histórico de preços
-        persistPriceHistory(q.symbol, price, q.regularMarketVolume);
-      }
+    const prices = await getQuotes(toFetch);
+    for (const [symbol, price] of Object.entries(prices)) {
+      result[symbol] = price;
+      redis.set(`price:${symbol}`, price, 'EX', 25).catch(() => {});
+      persistPriceHistory(symbol, price, null);
     }
   }
 
   return result;
 }
 
-// ─── Salva histórico de preços (fire-and-forget) ──────────
+// ─── Salva histórico ──────────────────────────────────────
 async function persistPriceHistory(ticker, price, volume) {
   try {
     const asset = await prisma.asset.findUnique({ where: { ticker } });
@@ -155,12 +141,10 @@ async function persistPriceHistory(ticker, price, volume) {
     await prisma.priceHistory.create({
       data: { assetId: asset.id, price, volume: volume ?? null },
     });
-  } catch {
-    // Não interrompe o fluxo principal
-  }
+  } catch {}
 }
 
-// ─── Formata preço com moeda ──────────────────────────────
+// ─── Formata preço ────────────────────────────────────────
 function formatPrice(price, currency = 'BRL') {
   const val = parseFloat(price);
   if (currency === 'BRL') return `R$ ${val.toFixed(2)}`;
