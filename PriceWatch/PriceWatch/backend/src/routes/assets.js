@@ -2,7 +2,7 @@
 // Separar em arquivos distintos em produção
 
 const express = require('express');
-const yf      = require('yahoo-finance2').default;
+const yf = require('yahoo-finance2');
 const Redis   = require('ioredis');
 const { PrismaClient } = require('@prisma/client');
 const { requireAuth } = require('./auth');

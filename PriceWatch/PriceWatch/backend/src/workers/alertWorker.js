@@ -3,7 +3,7 @@
 
 const cron    = require('node-cron');
 const { PrismaClient } = require('@prisma/client');
-const yf      = require('yahoo-finance2').default;
+const yf = require('yahoo-finance2');
 const admin   = require('firebase-admin');
 const Redis   = require('ioredis');
 
