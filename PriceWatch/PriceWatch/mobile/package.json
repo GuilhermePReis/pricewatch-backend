@@ -1,0 +1,35 @@
+{
+  "name": "pricewatch",
+  "version": "1.0.0",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios"
+  },
+  "dependencies": {
+    "@react-navigation/bottom-tabs": "^6.5.20",
+    "@react-navigation/native": "^6.1.17",
+    "@react-navigation/native-stack": "^6.9.26",
+    "axios": "^1.6.8",
+    "expo": "~50.0.0",
+    "expo-font": "~11.10.3",
+    "expo-notifications": "~0.27.7",
+    "expo-secure-store": "~12.8.1",
+    "expo-status-bar": "~1.11.1",
+    "i18next": "^23.10.1",
+    "react": "18.2.0",
+    "react-i18next": "^14.1.0",
+    "react-native": "0.73.6",
+    "react-native-gesture-handler": "~2.15.0",
+    "react-native-reanimated": "~3.7.2",
+    "react-native-safe-area-context": "4.8.2",
+    "react-native-screens": "~3.29.0",
+    "react-native-svg": "15.0.0",
+    "victory-native": "^36.9.1",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0"
+  }
+}
