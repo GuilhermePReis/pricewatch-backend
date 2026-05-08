@@ -10,7 +10,7 @@ const authRoutes   = require('./routes/auth');
 const assetRoutes  = require('./routes/assets');
 const alertRoutes  = require('./routes/alerts');
 const userRoutes   = require('./routes/users');
-const priceRoutes  = require('./routes/prices');
+app.use('/api/prices', priceRoutes);
 
 const { initWebSocket } = require('./services/websocketService');
 const { startAlertWorker } = require('./workers/alertWorker');
