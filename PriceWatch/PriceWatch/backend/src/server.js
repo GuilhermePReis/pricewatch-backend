@@ -1,29 +1,28 @@
 // PriceWatch — server.js
 require('dotenv').config();
-const express = require('express');
-const helmet  = require('helmet');
-const cors    = require('cors');
-const rateLimit = require('express-rate-limit');
+
+const express    = require('express');
+const helmet     = require('helmet');
+const cors       = require('cors');
+const rateLimit  = require('express-rate-limit');
 const { createServer } = require('http');
 
 const authRoutes   = require('./routes/auth');
 const assetRoutes  = require('./routes/assets');
 const alertRoutes  = require('./routes/alerts');
 const userRoutes   = require('./routes/users');
-app.use('/api/prices', priceRoutes);
 
-const { initWebSocket } = require('./services/websocketService');
+const { initWebSocket }    = require('./services/websocketService');
 const { startAlertWorker } = require('./workers/alertWorker');
+const { initFirebase }     = require('./services/firebaseService');
 
-const app = express();
+const app        = express();
 const httpServer = createServer(app);
 
-// ─── Segurança ────────────────────────────────────────────
 app.use(helmet());
-app.use(cors({ origin: '*' })); // restringir em produção
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// Rate limiting global: 100 req / 15 min por IP
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -31,29 +30,27 @@ app.use(rateLimit({
   legacyHeaders: false,
 }));
 
-// ─── Rotas ────────────────────────────────────────────────
 app.use('/api/auth',   authRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/users',  userRoutes);
-app.use('/api/prices', priceRoutes);
 
-// Health check
 app.get('/health', (_req, res) => res.json({ status: 'ok', app: 'PriceWatch' }));
 
-// ─── Erro global ─────────────────────────────────────────
 app.use((err, _req, res, _next) => {
   console.error(err.stack);
   res.status(err.status || 500).json({ error: err.message || 'Erro interno' });
 });
 
-// ─── WebSocket (preços em tempo real) ────────────────────
+initFirebase();
 initWebSocket(httpServer);
-
-// ─── Worker de alertas ────────────────────────────────────
 startAlertWorker();
 
 const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, () => {
-  console.log(`🚀 PriceWatch API rodando na porta ${PORT}`);
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 PriceWatch API porta ${PORT}`);
+});
+
+process.on('SIGTERM', () => {
+  httpServer.close(() => process.exit(0));
 });
